@@ -708,11 +708,15 @@ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 name = "heap-dump-browser"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "hprof-rs",
+ "log",
  "patternfly-yew",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-logger",
+ "web-sys",
  "yew",
  "yew-hooks",
  "yew-more-hooks",
@@ -730,6 +734,14 @@ name = "hermit-abi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
+
+[[package]]
+name = "hprof-rs"
+version = "0.1.0"
+dependencies = [
+ "strum",
+ "strum_macros",
+]
 
 [[package]]
 name = "http"

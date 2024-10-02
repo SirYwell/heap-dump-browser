@@ -1,7 +1,8 @@
 .devenv
 .direnv
 
-# Added by cargo
-
 /target
+/node_modules
+/dist
 
+/.idea

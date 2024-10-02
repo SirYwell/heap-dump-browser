@@ -1,41 +1,44 @@
-use patternfly_yew::prelude::{Grid, GridItem, Progress, ProgressMeasureLocation};
+mod load_file;
+mod view_heap_dump;
+
+use crate::load_file::UploadFile;
+use crate::view_heap_dump::ViewHeapDump;
+use patternfly_yew::prelude::{BackdropViewer, ToastViewer};
 use yew::prelude::*;
+use yew_nested_router::{Router, Switch, Target};
 
 #[function_component]
 fn App() -> Html {
-    html!(
-        <Grid gutter=true>
-        <GridItem cols={[8]}>
-        <Progress description="Test" value=0.33 location={ProgressMeasureLocation::Inside} />
-        {test()}
-        </GridItem>
-        <GridItem cols={[4]} rows={[2]}>
-            {"cols = 4, rows = 2"}
-        </GridItem>
-        <GridItem cols={[2]} rows={[3]}>
-          {"cols = 2, rows = 3"}
-        </GridItem>
-        <GridItem cols={[2]}>{"cols = 2"}</GridItem>
-        <GridItem cols={[4]}>{"cols = 4"}</GridItem>
-        <GridItem cols={[2]}>{"cols = 2"}</GridItem>
-        <GridItem cols={[2]}>{"cols = 2"}</GridItem>
-        <GridItem cols={[2]}>{"cols = 2"}</GridItem>
-        <GridItem cols={[4]}>{"cols = 4"}</GridItem>
-        <GridItem cols={[2]}>{"cols = 2"}</GridItem>
-        <GridItem cols={[4]}>{"cols = 4"}</GridItem>
-        <GridItem cols={[4]}>{"cols = 4"}</GridItem>
-    </Grid>
-    )
+    html! {
+        <BackdropViewer>
+            <ToastViewer>
+                <Router<AppRoute> default={AppRoute::Upload}>
+                    <Switch<AppRoute> render={route} />
+                </Router<AppRoute>>
+            </ToastViewer>
+        </BackdropViewer>
+    }}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Target)]
+enum AppRoute {
+    #[default]
+    Upload,
+    Analysis
 }
 
-fn test() -> Html {
-    html!(
-        <>
-        <h1>{"Hey!!"}</h1>
-        </>
-    )
+fn route(target: AppRoute) -> Html {
+    match target {
+        AppRoute::Upload => html!(<UploadFile/>),
+        AppRoute::Analysis => html!(<ViewHeapDump/>)
+    }
 }
+
+#[cfg(not(debug_assertions))]
+const LOG_LEVEL: log::Level = log::Level::Info;
+#[cfg(debug_assertions)]
+const LOG_LEVEL: log::Level = log::Level::Trace;
 
 fn main() {
+    wasm_logger::init(wasm_logger::Config::new(LOG_LEVEL));
     yew::Renderer::<App>::new().render();
 }
