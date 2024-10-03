@@ -1,35 +1,39 @@
 mod load_file;
 mod view_heap_dump;
+mod heap_dump;
 
 use crate::load_file::UploadFile;
 use crate::view_heap_dump::ViewHeapDump;
 use patternfly_yew::prelude::{BackdropViewer, ToastViewer};
 use yew::prelude::*;
-use yew_nested_router::{Router, Switch, Target};
+use yew_router::{BrowserRouter, Routable, Switch};
 
 #[function_component]
 fn App() -> Html {
     html! {
         <BackdropViewer>
             <ToastViewer>
-                <Router<AppRoute> default={AppRoute::Upload}>
+                <BrowserRouter>
                     <Switch<AppRoute> render={route} />
-                </Router<AppRoute>>
+                </BrowserRouter>
             </ToastViewer>
         </BackdropViewer>
-    }}
+    }
+}
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Target)]
+#[derive(Debug, Default, Clone, PartialEq, Routable)]
 enum AppRoute {
     #[default]
+    #[at("/")]
     Upload,
-    Analysis
+    #[at("/view")]
+    Analysis,
 }
 
 fn route(target: AppRoute) -> Html {
     match target {
         AppRoute::Upload => html!(<UploadFile/>),
-        AppRoute::Analysis => html!(<ViewHeapDump/>)
+        AppRoute::Analysis => html!(<ViewHeapDump/>),
     }
 }
 

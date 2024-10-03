@@ -1,18 +1,17 @@
-use std::io::Cursor;
+use crate::heap_dump::from_reader;
+use crate::AppRoute;
 use hprof_rs::reader::HprofReader;
 use patternfly_yew::prelude::{
-    use_backdrop, Bullseye, Button, ButtonVariant, CodeBlock, CodeBlockCode, FileUpload,
-    FileUploadDetails, FileUploadSelect, Form, FormGroup, HelperText, HelperTextItem,
-    HelperTextItemVariant, InputGroup, Modal, ModalVariant
-    , TextInput,
+    use_backdrop, Bullseye, Button, ButtonVariant, FileUpload, FileUploadDetails, FileUploadSelect,
+    Form, FormGroup, HelperText, HelperTextItem, HelperTextItemVariant, InputGroup, Modal,
+    ModalVariant, Spinner, SpinnerSize, TextInput,
 };
-use yew::{
-    function_component, html, use_callback, use_node_ref, use_state, Callback, Html,
-};
-use yew_hooks::{use_drop_with_options, UseDropOptions};
-use yew_more_hooks::hooks::r#async::{*};
-use chrono::DateTime;
+use std::io::Cursor;
 use web_sys::js_sys::{ArrayBuffer, Uint8Array};
+use yew::{function_component, html, use_callback, use_node_ref, use_state, Callback, Html};
+use yew_hooks::{use_drop_with_options, UseDropOptions};
+use yew_more_hooks::hooks::r#async::*;
+use yew_router::hooks::use_navigator;
 
 #[derive(Clone, Debug, PartialEq)]
 enum DropContent {
@@ -74,7 +73,7 @@ pub(crate) fn upload() -> Html {
         |content| async move {
             let content = match &*content {
                 DropContent::Files(files) => files.first(),
-                _ => None
+                _ => None,
             };
 
             match content {
@@ -82,17 +81,19 @@ pub(crate) fn upload() -> Html {
                     // TODO: should that happen on a worker thread?
                     log::trace!("trying to read heap dump");
                     let promise = file.array_buffer();
-                    let res = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(|v| v.as_string().unwrap_or_default())?;
+                    let res = wasm_bindgen_futures::JsFuture::from(promise)
+                        .await
+                        .map_err(|v| v.as_string().unwrap_or_default())?;
                     let x: ArrayBuffer = ArrayBuffer::from(res.clone());
                     let byte_array = Uint8Array::new(&x);
                     let cursor = Cursor::new(byte_array.to_vec());
                     let r = HprofReader::new(cursor)
                         .map_err(|err| err.to_string())
-                        .map(|reader| DateTime::from_timestamp_millis(reader.timestamp as i64));
-                    log::info!("successfully read heap dump file header");
+                        .map(|_| byte_array);
+                    log::info!("read heap dump file header");
                     r
-                },
-                None => Err("Requires a Hprof file".to_string())
+                }
+                None => Err("Requires a Hprof file".to_string()),
             }
         },
         drop_content.clone(),
@@ -115,28 +116,32 @@ pub(crate) fn upload() -> Html {
 
     let backdrop = use_backdrop();
 
+    let navigator = use_navigator().unwrap();
+
     let onsubmit = {
         let processing = processing.clone();
         Callback::from(move |_| {
-
             if let Some((data, backdrop)) = processing.data().zip(backdrop.as_ref()) {
-                backdrop.open(html!({
-                    html!(
+                log::info!("loading hprof file");
+                let cursor = Cursor::new(data.to_vec());
+                let r = HprofReader::new(cursor);
+                let heap_dump = r.map(|reader| from_reader(reader));
+                match heap_dump {
+                    Ok(heap_dump) => {
+                        backdrop.close();
+                        navigator.push_with_state(&AppRoute::Analysis, heap_dump)
+                    }
+                    Err(err) => backdrop.open(html!(
                         <Bullseye plain=true>
                             <Modal
-                                title="Submitted Result"
+                                title="Failed to load file"
                                 variant={ModalVariant::Large}
                             >
-                                <CodeBlock>
-                                    <CodeBlockCode>
-                                        { "This heap dump was created at " }
-                                        { data.map(|date| date.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default() }
-                                    </CodeBlockCode>
-                                </CodeBlock>
+                            {err.to_string()}
                             </Modal>
                         </Bullseye>
-                    )
-                }))
+                    )),
+                }
             }
         })
     };
@@ -197,10 +202,10 @@ pub(crate) fn upload() -> Html {
                             </Button>
                             <Button
                                 variant={ButtonVariant::Control}
-                                disabled={error.is_some()}
+                                disabled={error.is_some() || processing.is_processing()}
                                 onclick={onsubmit}
                             >
-                                {"Upload"}
+                                {"Load"}
                             </Button>
                             <Button
                                 variant={ButtonVariant::Control}
