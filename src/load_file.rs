@@ -4,7 +4,7 @@ use hprof_rs::reader::HprofReader;
 use patternfly_yew::prelude::{
     use_backdrop, Bullseye, Button, ButtonVariant, FileUpload, FileUploadDetails, FileUploadSelect,
     Form, FormGroup, HelperText, HelperTextItem, HelperTextItemVariant, InputGroup, Modal,
-    ModalVariant, Spinner, SpinnerSize, TextInput,
+    ModalVariant, TextInput,
 };
 use std::io::Cursor;
 use web_sys::js_sys::{ArrayBuffer, Uint8Array};

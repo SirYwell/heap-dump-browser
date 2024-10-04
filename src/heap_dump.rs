@@ -13,8 +13,8 @@ pub struct HeapDump {
     pub created_at: DateTime<Utc>,
     pub names: HashMap<U8, String>,
     pub classes: HashMap<U8, AnalysisClassInfo>,
-    pub objects: HashMap<U8, Rc<Vec<Value>>>,
-    pub objects_by_class: HashMap<U8, Rc<Vec<Value>>>,
+    pub objects: HashMap<U8, Rc<InstanceInfo>>,
+    pub objects_by_class: HashMap<U8, Rc<InstanceInfo>>,
 }
 
 impl HeapDump {
@@ -22,8 +22,8 @@ impl HeapDump {
         created_at: DateTime<Utc>,
         names: HashMap<U8, String>,
         classes: HashMap<U8, AnalysisClassInfo>,
-        objects: HashMap<U8, Rc<Vec<Value>>>,
-        objects_by_class: HashMap<U8, Rc<Vec<Value>>>,
+        objects: HashMap<U8, Rc<InstanceInfo>>,
+        objects_by_class: HashMap<U8, Rc<InstanceInfo>>,
     ) -> HeapDump {
         HeapDump {
             id: COUNTER.fetch_add(1, Ordering::AcqRel),
@@ -31,7 +31,7 @@ impl HeapDump {
             names,
             classes,
             objects,
-            objects_by_class
+            objects_by_class,
         }
     }
 }
@@ -42,11 +42,16 @@ impl PartialEq for HeapDump {
     }
 }
 
-#[derive(PartialEq)]
 pub struct AnalysisClassInfo {
     pub class_object_id: U8,
     pub class_name_id: U8,
     pub super_class_object_id: U8,
+    pub class_loader_object_id: U8,
+}
+
+pub struct InstanceInfo {
+    pub class_object_id: U8,
+    pub fields: Vec<Value>,
 }
 
 pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
@@ -76,6 +81,7 @@ pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
                                     .get(&class_info.class_object_id)
                                     .unwrap(),
                                 super_class_object_id: class_info.super_class_object_id,
+                                class_loader_object_id: class_info.class_loader_object_id,
                             };
                             classes.insert(class_info.class_object_id, ci);
                         }
@@ -85,7 +91,10 @@ pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
                             instance_field_values,
                             ..
                         } => {
-                            let rc = Rc::new(instance_field_values);
+                            let rc = Rc::new(InstanceInfo {
+                                fields: instance_field_values,
+                                class_object_id,
+                            });
                             objects.insert(object_id, rc.clone());
                             objects_by_class.insert(class_object_id, rc);
                         }

@@ -18,3 +18,5 @@ hprof-rs = { git = "https://github.com/SirYwell/hprof-rs" }
 web-sys = "0.3.70"
 log = "0.4.22"
 chrono = "0.4.38"
+mini-moka = "0.10.3"
+itertools = "0.13.0"
