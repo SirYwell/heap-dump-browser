@@ -1,7 +1,6 @@
-use crate::heap_dump::{AnalysisClassInfo, HeapDump, InstanceInfo};
+use crate::heap_dump::{AnalysisClassInfo, HeapDump, InstanceInfo, Reference};
 use crate::AppRoute;
 use hprof_rs::hprof_model::U8;
-use itertools::Itertools;
 use mini_moka::unsync::Cache;
 use patternfly_yew::prelude::{
     use_table_data, Cell, CellContext, MemoizedTableModel, Navigation, Pagination,
@@ -10,6 +9,7 @@ use patternfly_yew::prelude::{
 };
 use std::collections::HashMap;
 use std::rc::Rc;
+use itertools::Itertools;
 use yew::{
     function_component, html, html_nested, use_callback, use_memo, use_state_eq, Html, Properties,
 };
@@ -105,8 +105,8 @@ fn class_table(props: &Props) -> Html {
                     props
                         .heap_dump
                         .objects_by_class
-                        .get(&class_info.class_object_id)
-                        .map(|v| v.fields.len())
+                        .get_vec(&class_info.class_object_id)
+                        .map(|v| v.len())
                         .unwrap_or(0),
                 )
             })
@@ -202,6 +202,13 @@ fn plugin_table(props: &Props) -> Html {
         .heap_dump
         .objects
         .values()
+        .filter_map(|reference| {
+            match &**reference {
+                Reference::Instance(instance) => Some(instance),
+                Reference::ObjectArray(_) => None,
+                Reference::PrimitiveArray(_) => None,
+            }
+        })
         .filter(|instance| is_plugin_class(instance, &mut is_plugin_class_cache, classes, names))
         .collect::<Vec<_>>();
 
