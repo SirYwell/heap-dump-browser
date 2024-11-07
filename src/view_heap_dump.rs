@@ -1,18 +1,24 @@
-use crate::heap_dump::{AnalysisClassInfo, HeapDump, InstanceInfo, Reference};
+use crate::heap_dump::{AnalysisClassInfo, HeapDump, InstanceInfo, Reference, FAKE_ROOT_ID};
 use crate::AppRoute;
 use hprof_rs::hprof_model::U8;
+use itertools::Itertools;
 use mini_moka::unsync::Cache;
 use patternfly_yew::prelude::{
     use_table_data, Cell, CellContext, MemoizedTableModel, Navigation, Pagination,
     PaginationPosition, Tab, Table, TableColumn, TableEntryRenderer, TableHeader, TableMode, Tabs,
     Toolbar, ToolbarContent, ToolbarItem, ToolbarItemType, UseTableData,
 };
+use petgraph::algo;
 use std::collections::HashMap;
 use std::rc::Rc;
-use itertools::Itertools;
-use yew::{
-    function_component, html, html_nested, use_callback, use_memo, use_state_eq, Html, Properties,
-};
+use yew::function_component;
+use yew::html;
+use yew::html_nested;
+use yew::use_callback;
+use yew::use_memo;
+use yew::use_state_eq;
+use yew::Html;
+use yew::Properties;
 use yew_router::hooks::use_location;
 use yew_router::prelude::use_navigator;
 use yew_router::Routable;
@@ -44,7 +50,10 @@ pub(crate) fn view() -> Html {
                     <ClassTable heap_dump={state.clone()}/>
                 </Tab<usize>>
                 <Tab<usize> index=2 title="Plugins">
-                    <PluginTable heap_dump={state}/>
+                    <PluginTable heap_dump={state.clone()}/>
+                </Tab<usize>>
+                <Tab<usize> index=4 title="Memory Usage Bugs">
+                    <MemoryBugs heap_dump={state.clone()}/>
                 </Tab<usize>>
             </Tabs<usize>>
         </>
@@ -202,12 +211,11 @@ fn plugin_table(props: &Props) -> Html {
         .heap_dump
         .objects
         .values()
-        .filter_map(|reference| {
-            match &**reference {
-                Reference::Instance(instance) => Some(instance),
-                Reference::ObjectArray(_) => None,
-                Reference::PrimitiveArray(_) => None,
-            }
+        .filter_map(|reference| match &**reference {
+            Reference::Instance(instance) => Some(instance),
+            Reference::ObjectArray(_) => None,
+            Reference::PrimitiveArray(_) => None,
+            Reference::FakeCommonRoot => None,
         })
         .filter(|instance| is_plugin_class(instance, &mut is_plugin_class_cache, classes, names))
         .collect::<Vec<_>>();
@@ -343,4 +351,72 @@ fn is_java_plugin_class_exact(names: &HashMap<U8, String>, class_info: &Analysis
         .get(&class_info.class_name_id)
         .unwrap_or(&"<< no name >>".to_string())
         == "org/bukkit/plugin/java/JavaPlugin"
+}
+
+fn is_craft_player_class(names: &HashMap<U8, String>, class_info: &AnalysisClassInfo) -> bool {
+    let no_name = "<< no name >>".to_string();
+    let name = names.get(&class_info.class_name_id).unwrap_or(&no_name);
+    name == "org/bukkit/craftbukkit/entity/CraftPlayer"
+}
+
+#[function_component(MemoryBugs)]
+fn memory_bugs(props: &Props) -> Html {
+    let heap_dump = &props.heap_dump;
+    let names = &props.heap_dump.names;
+    log::info!("number of classes: {}", &props.heap_dump.classes.len());
+    let class = &props
+        .heap_dump
+        .classes
+        .values()
+        .find(|class| is_craft_player_class(names, class))
+        .expect("CraftPlayer class not loaded?");
+
+    let object_graph = &props.heap_dump.object_graph;
+
+    let empty_vec = Vec::new();
+    let player_instances = props
+        .heap_dump
+        .objects_by_class
+        .get_vec(&class.class_object_id)
+        .unwrap_or(&empty_vec);
+
+    let rc = FAKE_ROOT_ID;
+    let mut leaking_instances = Vec::new();
+    for player_instance in player_instances {
+        let x = match &**player_instance {
+            Reference::Instance(instance_info) => instance_info,
+            _ => panic!("player instance is not an instance"),
+        };
+        let mut paths =
+            algo::all_simple_paths::<Vec<_>, _>(object_graph, rc.clone(), x.object_id, 1, None);
+        let referenced_by_mc = paths.all(|path| {
+            path.iter().any(|reference| {
+                let reference = heap_dump.objects.get(reference);
+                match reference {
+                    Some(thing) => {
+                        let x = &**thing;
+                        match x {
+                            Reference::Instance(instance_info) => {
+                                is_loaded_by_mc(&instance_info, &heap_dump)
+                            }
+                            Reference::ObjectArray(_) => false, // TODO who loads array classes?
+                            _ => false,
+                        }
+                    }
+                    None => false,
+                }
+            })
+        });
+        if !referenced_by_mc {
+            leaking_instances.push(player_instance.clone())
+        }
+    }
+
+    html!(<>{leaking_instances.len()}</>)
+}
+
+fn is_loaded_by_mc(instance_info: &InstanceInfo, heap_dump: &HeapDump) -> bool {
+    let class_id = instance_info.class_object_id;
+    let class: Option<&AnalysisClassInfo> = heap_dump.classes.get(&class_id);
+    class.filter(|c| c.class_loader_object_id != 0u64).is_some() // TODO add (other?) allowed classloaders
 }

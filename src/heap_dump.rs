@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+pub const FAKE_ROOT_ID: U8 = U8::MAX; 
+
 pub struct HeapDump {
     id: u64,
     pub created_at: DateTime<Utc>,
@@ -18,6 +20,7 @@ pub struct HeapDump {
     pub classes: HashMap<U8, AnalysisClassInfo>,
     pub objects: HashMap<U8, Rc<Reference>>,
     pub objects_by_class: MultiMap<U8, Rc<Reference>>,
+    pub object_graph: DiGraphMap<U8, ()>,
 }
 
 impl HeapDump {
@@ -27,8 +30,9 @@ impl HeapDump {
         classes: HashMap<U8, AnalysisClassInfo>,
         objects: HashMap<U8, Rc<Reference>>,
         objects_by_class: MultiMap<U8, Rc<Reference>>,
+        roots: Vec<U8>,
     ) -> HeapDump {
-        let mut object_graph: DiGraphMap<&Reference, ()> =
+        let mut object_graph: DiGraphMap<U8, ()> =
             DiGraphMap::with_capacity(objects.len(), objects.len() * 2);
 
         for object in objects.values() {
@@ -37,12 +41,10 @@ impl HeapDump {
                     for value in &instance.fields {
                         match value {
                             Value::Object { object_id } => {
-                                let to = objects.get(&object_id).unwrap();
-                                object_graph.add_edge(object, to, ());
+                                object_graph.add_edge(instance.object_id, *object_id, ());
                             }
                             Value::Array { object_id } => {
-                                let to = objects.get(&object_id).unwrap();
-                                object_graph.add_edge(object, to, ());
+                                object_graph.add_edge(instance.object_id, *object_id, ());
                             }
                             Value::Byte(_) => {}
                             Value::Char(_) => {}
@@ -54,16 +56,19 @@ impl HeapDump {
                             Value::Boolean(_) => {}
                         }
                     }
-
                 }
                 Reference::ObjectArray(array) => {
                     for object_id in &array.values {
-                        let to = objects.get(&object_id).unwrap();
-                        object_graph.add_edge(object, to, ());
+                        object_graph.add_edge(array.object_id, *object_id, ());
                     }
                 }
                 Reference::PrimitiveArray(_) => {} // has no outgoing references
+                Reference::FakeCommonRoot => panic!("unexpected fake root")
             }
+        }
+
+        for root in roots {
+            object_graph.add_edge(FAKE_ROOT_ID, root, ());
         }
 
         HeapDump {
@@ -73,6 +78,7 @@ impl HeapDump {
             classes,
             objects,
             objects_by_class,
+            object_graph,
         }
     }
 }
@@ -95,6 +101,9 @@ pub enum Reference {
     Instance(InstanceInfo),
     ObjectArray(ObjectArray),
     PrimitiveArray(PrimitiveArray),
+    /// used to have one common "object" that references
+    /// all actual root objects in the object_graph
+    FakeCommonRoot,
 }
 
 pub struct InstanceInfo {
@@ -103,8 +112,7 @@ pub struct InstanceInfo {
     pub fields: Vec<Value>,
 }
 
-impl Eq for InstanceInfo {
-}
+impl Eq for InstanceInfo {}
 
 impl PartialEq<Self> for InstanceInfo {
     fn eq(&self, other: &Self) -> bool {
@@ -136,9 +144,7 @@ pub struct ObjectArray {
     pub values: Vec<U8>,
 }
 
-impl Eq for ObjectArray {
-
-}
+impl Eq for ObjectArray {}
 
 impl PartialEq for ObjectArray {
     fn eq(&self, other: &Self) -> bool {
@@ -170,9 +176,7 @@ pub struct PrimitiveArray {
     pub values: Vec<Value>,
 }
 
-impl Eq for PrimitiveArray {
-
-}
+impl Eq for PrimitiveArray {}
 
 impl PartialEq for PrimitiveArray {
     fn eq(&self, other: &Self) -> bool {
@@ -200,13 +204,12 @@ impl Hash for PrimitiveArray {
 
 pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
     let mut loaded_classes = HashMap::new();
-    let mut dump = HeapDump::new(
-        DateTime::from_timestamp_millis(reader.timestamp as i64).unwrap(),
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
-        MultiMap::new(),
-    );
+
+    let mut names = HashMap::new();
+    let mut classes = HashMap::new();
+    let mut objects = HashMap::new();
+    let mut objects_by_class = MultiMap::new();
+    let mut roots = Vec::new();
 
     while let Some(record) = reader.next() {
         match record {
@@ -214,12 +217,18 @@ pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
                 for sub_record in sub_records {
                     match sub_record {
                         HeapDumpTag::HprofGcRootUnknown => {}
-                        HeapDumpTag::HprofGcRootThreadObj { .. } => {}
-                        HeapDumpTag::HprofGcRootJniGlobal { .. } => {}
-                        HeapDumpTag::HprofGcRootJniLocal { .. } => {}
-                        HeapDumpTag::HprofGcRootJavaFrame { .. } => {}
+                        HeapDumpTag::HprofGcRootThreadObj {
+                            thread_object_id, ..
+                        } => roots.push(thread_object_id),
+                        HeapDumpTag::HprofGcRootJniGlobal { object_id, .. } => {
+                            roots.push(object_id)
+                        }
+                        HeapDumpTag::HprofGcRootJniLocal { object_id, .. } => roots.push(object_id),
+                        HeapDumpTag::HprofGcRootJavaFrame { object_id, .. } => {
+                            roots.push(object_id)
+                        }
                         HeapDumpTag::HprofGcRootNativeStack => {}
-                        HeapDumpTag::HprofGcRootStickyClass { .. } => {}
+                        HeapDumpTag::HprofGcRootStickyClass { object_id } => roots.push(object_id),
                         HeapDumpTag::HprofGcRootThreadBlock => {}
                         HeapDumpTag::HprofGcRootMonitorUsed => {}
                         HeapDumpTag::HprofGcClassDump(class_info) => {
@@ -231,7 +240,7 @@ pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
                                 super_class_object_id: class_info.super_class_object_id,
                                 class_loader_object_id: class_info.class_loader_object_id,
                             };
-                            dump.classes.insert(class_info.class_object_id, ci);
+                            classes.insert(class_info.class_object_id, ci);
                         }
                         HeapDumpTag::HprofGcInstanceDump {
                             object_id,
@@ -242,36 +251,45 @@ pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
                             let instance = InstanceInfo {
                                 fields: instance_field_values,
                                 class_object_id,
-                                object_id
+                                object_id,
                             };
                             let rc = Rc::new(Reference::Instance(instance));
-                            dump.objects.insert(object_id, rc.clone());
-                            dump.objects_by_class.insert(class_object_id, rc);
+                            objects.insert(object_id, rc.clone());
+                            objects_by_class.insert(class_object_id, rc);
                         }
-                        HeapDumpTag::HprofGcObjArrayDump { array_object_id, array_class_id, elements, .. } => {
+                        HeapDumpTag::HprofGcObjArrayDump {
+                            array_object_id,
+                            array_class_id,
+                            elements,
+                            ..
+                        } => {
                             let array = ObjectArray {
                                 class_object_id: array_class_id,
                                 values: elements,
                                 object_id: array_object_id,
                             };
                             let rc = Rc::new(Reference::ObjectArray(array));
-                            dump.objects.insert(array_object_id, rc.clone());
-                            dump.objects_by_class.insert(array_class_id, rc);
+                            objects.insert(array_object_id, rc.clone());
+                            objects_by_class.insert(array_class_id, rc);
                         }
-                        HeapDumpTag::HprofGcPrimArrayDump { array_object_id, elements, .. } => {
+                        HeapDumpTag::HprofGcPrimArrayDump {
+                            array_object_id,
+                            elements,
+                            ..
+                        } => {
                             let array = PrimitiveArray {
                                 values: elements,
-                                object_id: array_object_id
+                                object_id: array_object_id,
                             };
                             let rc = Rc::new(Reference::PrimitiveArray(array));
-                            dump.objects.insert(array_object_id, rc.clone());
+                            objects.insert(array_object_id, rc.clone());
                             // TODO class to object mapping for primitive arrays?
                         }
                     }
                 }
             }
             Ok(RecordTag::HprofUtf8 { id, utf8, .. }) => {
-                dump.names.insert(id, utf8);
+                names.insert(id, utf8);
             }
             Ok(RecordTag::HprofLoadClass {
                 class_name_id,
@@ -284,5 +302,12 @@ pub fn from_reader<T: Read + Seek>(mut reader: HprofReader<T>) -> HeapDump {
             Err(_) => {}
         }
     }
-    dump
+    HeapDump::new(
+        DateTime::from_timestamp_millis(reader.timestamp as i64).unwrap(),
+        names,
+        classes,
+        objects,
+        objects_by_class,
+        roots,
+    )
 }
